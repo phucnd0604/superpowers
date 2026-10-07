@@ -1,10 +1,25 @@
 {
   "name": "superpowers",
-  "version": "6.4.2",
-  "description": "Superpowers skills and runtime bootstrap for coding agents",
+  "version": "6.4.2-dsh.1",
+  "description": "Superpowers skills and runtime bootstrap for coding agents (DeepSeek Harness fork)",
   "type": "module",
-  "main": ".opencode/plugins/superpowers.js",
+  "main": "./lib/dsh-adapter.js",
+  "exports": {
+    ".": "./lib/dsh-adapter.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "engines": {
+      "dsh": ">=0.1.5-rc.1"
+    }
+  },
   "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
     "pi-package",
     "skills",
     "tdd",

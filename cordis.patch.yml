@@ -1,0 +1,10 @@
+# DeepSeek Harness bundle patch for the obra/superpowers fork.
+#
+# One row inserts the adapter as a bundle layer, so the profile roster carries
+# the plugin. `skills/` above it stays byte-identical to upstream v6.4.2.
+#
+# This patch is applied over the dsh-base layer; later layers (the profile's own
+# cordis.patch.yml and --patch overlays) can still address this row by id.
+- insert:
+    - id: superpowers-dsh
+      name: 'superpowers-dsh'
