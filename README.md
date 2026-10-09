@@ -24,6 +24,7 @@ Superpowers is a complete software development methodology for your coding agent
   - [Hermes Agent](#hermes-agent)
   - [Muse](#muse)
 - [The Basic Workflow](#the-basic-workflow)
+- [DeepSeek Harness](#deepseek-harness)
 - [When Something Goes Wrong](#when-something-goes-wrong)
 - [Community](#community)
 - [What's Inside](#whats-inside)
@@ -385,6 +386,47 @@ The general contribution process for Superpowers is below. Keep in mind that we 
 Skill-behavior tests use the drill eval harness from [superpowers-evals](https://github.com/prime-radiant-inc/superpowers-evals/), cloned into `evals/` — see `evals/README.md` for setup. Plugin-infrastructure tests live at `tests/` and run via the relevant `run-*.sh` or `npm test`.
 
 See `skills/writing-skills/SKILL.md` for the complete guide.
+
+## DeepSeek Harness
+
+This fork ships a DeepSeek Harness adapter (`lib/dsh-adapter.js`), mounted as a
+bundle row by `cordis.patch.yml`. It registers three surfaces: the packaged
+skill provider, the bootstrap prompt section, and a per-request runtime-context
+reminder.
+
+### Installing
+
+```bash
+pnpm add github:phucnd0604/superpowers
+```
+
+Then add `superpowers` to `dsh.profile.bundles` in your profile's
+`package.json`:
+
+```json
+{
+  "dsh": {
+    "profile": {
+      "bundles": ["superpowers"]
+    }
+  }
+}
+```
+
+### Updating
+
+**Git dependencies are pinned, and no package.json syntax changes that.** pnpm
+resolves `main` to a commit on the first install and writes that hash into
+`pnpm-lock.yaml`, then keeps it on every later `pnpm install` — with or without
+a `#main` ref. There is no configuration that makes an existing install track
+the branch, so pull new commits explicitly:
+
+```bash
+pnpm update superpowers
+```
+
+Run that after pulling new work in this repository. A fresh install on a new
+machine picks up the current `main` on its own.
 
 ## Updating
 
