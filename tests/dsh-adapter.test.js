@@ -1,11 +1,12 @@
-// Verifies the DSH adapter mounts both prompt surfaces and that a broken
+// Verifies the DSH adapter mounts exactly one prompt surface, that it points at
+// the skill tool rather than inlining skill instructions, and that a broken
 // surface cannot take the plugin — and with it the whole web boot — down.
 //
-// Both surfaces are assertions on registration, not on rendered prompt text:
-// `systemPrompt.section` and `systemPrompt.context` are separate sort spaces
-// in the host registry, so a mount that registers the wrong one is silent. The
-// reminder exists to survive a long session, and it only survives if it is
-// registered as runtime context.
+// The bootstrap is a pointer, not a copy of `using-superpowers`. It rides every
+// request, so anything it quotes is a per-request cost; inlining the mandate
+// also produced a truncated skill (the section cut the body at
+// `## Skill Priority`), so the model saw "invoke a skill" with no rule for
+// which one. The rule itself is loaded once, in full, through the `skill` tool.
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -34,10 +35,9 @@ function makeCtx(overrides = {}) {
   };
 }
 
-// The prompt surfaces mount from a floating async block whose first await is a
-// real file read, so drain the macrotask queue before asserting. setImmediate
-// alone lands before that read resolves; polling is the honest way to wait for
-// an unspecified number of I/O turns.
+// The prompt surface mounts from a floating async block, so drain the macrotask
+// queue before asserting. Polling is the honest way to wait for an unspecified
+// number of I/O turns.
 async function settle(predicate, { attempts = 50 } = {}) {
   for (let i = 0; i < attempts; i++) {
     if (predicate()) return true;
@@ -46,48 +46,67 @@ async function settle(predicate, { attempts = 50 } = {}) {
   return predicate();
 }
 
-const bothMounted = (ctx) => ctx.sections.length > 0 && ctx.contexts.length > 0;
+const sectionMounted = (ctx) => ctx.sections.length > 0;
 
-test('mounts the bootstrap as a section and the reminder as runtime context', async () => {
+test('mounts the bootstrap as a section and no runtime context', async () => {
   const ctx = makeCtx();
   apply(ctx);
-  assert.ok(await settle(() => bothMounted(ctx)), 'both prompt surfaces must mount');
+  assert.ok(await settle(() => sectionMounted(ctx)), 'the bootstrap section must mount');
 
   const section = ctx.sections.find((s) => s.name === 'plugin:superpowers');
   assert.ok(section, 'bootstrap must register as a section');
   assert.match(section.text, /EXTREMELY-IMPORTANT/,
-    'the bootstrap text must be the mandate read from using-superpowers');
+    'the bootstrap must keep the marker that carries the mandate');
 
-  const context = ctx.contexts.find((c) => c.name === 'plugin:superpowers-reminder');
-  assert.ok(context, 'reminder must register as runtime context');
-  assert.ok(context.text.trim().length > 0, 'reminder text must not be empty');
+  // The per-request reminder was removed: it duplicated the section and, as
+  // runtime context, was the surface a preset can suppress.
+  assert.deepEqual(ctx.contexts, [],
+    'no runtime context may be registered');
 });
 
-test('reminder is short and points at the skill tool', async () => {
+test('bootstrap points at the skill instead of inlining the mandate', async () => {
   const ctx = makeCtx();
   apply(ctx);
-  assert.ok(await settle(() => bothMounted(ctx)), 'both prompt surfaces must mount');
+  assert.ok(await settle(() => sectionMounted(ctx)), 'the bootstrap section must mount');
 
-  const { text } = ctx.contexts.find((c) => c.name === 'plugin:superpowers-reminder');
-  assert.match(text, /using-superpowers/, 'reminder must name the skill it asks for');
-  assert.match(text, /skill/, 'reminder must name how to load it');
-  // It rides every request, so a restated mandate is a real cost.
-  assert.ok(text.split('\n').length <= 4,
-    `reminder must stay short, got ${text.split('\n').length} lines`);
-  assert.doesNotMatch(text, /EXTREMELY-IMPORTANT/,
-    'reminder must not duplicate the mandate that the section already carries');
+  const { text } = ctx.sections.find((s) => s.name === 'plugin:superpowers');
+  assert.match(text, /using-superpowers/, 'must name the skill it asks the model to load');
+  assert.match(text, /`skill`/, 'must name the tool that loads it');
+
+  // A truncated copy of the skill is worse than no copy: it carried the
+  // mandate while dropping `## Skill Priority` and the Red Flags table, so the
+  // model was told to check for a skill without being told how to choose one.
+  assert.doesNotMatch(text, /Skill Priority/,
+    'must not quote the skill body; the rule belongs in the skill, not the prompt');
+  assert.doesNotMatch(text, /rationalize/,
+    'must not quote the Red Flags table');
+  assert.doesNotMatch(text, /You cannot rationalize your way out of this/,
+    'must not quote the skill mandate verbatim');
 });
 
-test('reminder orders after delegation policy and before tool guidance', async () => {
+test('bootstrap tells the model to check for a skill on each new task', async () => {
   const ctx = makeCtx();
   apply(ctx);
-  assert.ok(await settle(() => bothMounted(ctx)), 'both prompt surfaces must mount');
+  assert.ok(await settle(() => sectionMounted(ctx)), 'the bootstrap section must mount');
 
-  // DSH allocates SANDBOX_POLICY 110, APPROVAL_POLICY 115, SUBAGENT_DELEGATION
-  // 120 in the runtime-context band; external contributors pick their own.
-  const { order } = ctx.contexts.find((c) => c.name === 'plugin:superpowers-reminder');
-  assert.ok(order > 120, `order must follow SUBAGENT_DELEGATION (120), got ${order}`);
-  assert.ok(Number.isFinite(order), 'order must be finite or the host rejects registration');
+  // The reason this text exists at all: the user wants the model to consult the
+  // superpowers workflow on every new task, not only at session start.
+  const { text } = ctx.sections.find((s) => s.name === 'plugin:superpowers');
+  assert.match(text, /each new task/i,
+    'must tell the model to re-check per task, which is what a rebuilt section buys');
+  assert.match(text, /catalog/i, 'must point at the catalog the model actually reads');
+});
+
+test('bootstrap stays small enough to ride every request', async () => {
+  const ctx = makeCtx();
+  apply(ctx);
+  assert.ok(await settle(() => sectionMounted(ctx)), 'the bootstrap section must mount');
+
+  const { text } = ctx.sections.find((s) => s.name === 'plugin:superpowers');
+  // A restated mandate is a per-request cost. The previous 885-char slice of
+  // the skill body was ~239 tokens on every single call.
+  assert.ok(text.length < 600,
+    `bootstrap must stay a pointer, got ${text.length} chars`);
 });
 
 test('plugin name matches the bundle row the loader resolves against', () => {
@@ -96,32 +115,12 @@ test('plugin name matches the bundle row the loader resolves against', () => {
   assert.equal(new URL('../package.json', import.meta.url).pathname.endsWith('package.json'), true);
 });
 
-test('a throwing section sink does not stop the reminder from mounting', async () => {
+test('a throwing section sink does not propagate out of apply()', async () => {
   const ctx = makeCtx({
     systemPrompt: {
       section: () => {
         throw new Error('section sink unavailable');
       },
-      context: (c) => ctx.contexts.push(c),
-    },
-  });
-  apply(ctx);
-  assert.ok(
-    await settle(() => ctx.contexts.length > 0),
-    'the reminder is registered even when the section sink throws',
-  );
-
-  // The two surfaces are independent: one failing must not skip the other.
-  assert.ok(
-    ctx.contexts.some((c) => c.name === 'plugin:superpowers-reminder'),
-    'reminder must still register when the section sink throws',
-  );
-});
-
-test('a throwing context sink does not propagate out of apply()', async () => {
-  const ctx = makeCtx({
-    systemPrompt: {
-      section: (s) => ctx.sections.push(s),
       context: () => {
         throw new Error('context sink unavailable');
       },
@@ -129,12 +128,8 @@ test('a throwing context sink does not propagate out of apply()', async () => {
   });
 
   assert.doesNotThrow(() => apply(ctx), 'a prompt-surface failure must not take the plugin down');
-  assert.ok(
-    await settle(() => ctx.sections.length > 0),
-    'the bootstrap section still mounts when the context sink throws',
-  );
-  assert.ok(ctx.sections.some((s) => s.name === 'plugin:superpowers'),
-    'the bootstrap section must still have mounted');
+  // With one surface left there is nothing left to fall back to, so the only
+  // thing left to assert is that the failure is contained, not propagated.
 });
 
 test('skill provider registers and discovers the packaged skills', async () => {
@@ -148,11 +143,13 @@ test('skill provider registers and discovers the packaged skills', async () => {
   const candidates = await provider.list({ signal: undefined });
   const names = candidates.map((c) => c.name);
 
+  // The bootstrap names this skill, so an absent one would make the pointer a
+  // dead end rather than a misfire.
   assert.ok(names.includes('using-superpowers'),
-    'the bootstrap skill must be discoverable, otherwise the reminder asks for something absent');
+    'the bootstrap names using-superpowers, so it must be discoverable');
   for (const skill of candidates) {
     assert.equal(skill.provider, 'superpowers');
     assert.equal(skill.invocation.modelInvocable, true,
-      `${skill.name} must be model-invocable or the reminder is a dead end`);
+      `${skill.name} must be model-invocable or the bootstrap is a dead end`);
   }
 });
